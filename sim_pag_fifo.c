@@ -1,6 +1,6 @@
 /*
     Copyright 2023 The Operating System Group at the UAH
-    sim_pag_random.c
+    sim_pag_fifo.c
  */
 
 #include <stdio.h>
@@ -34,8 +34,8 @@ void init_tables(ssystem* S) {
   S->frt[i].next = 0;   // Close circular list
   S->listfree = i;      // Point to the last one
 
-  // Empty circular list of occupied frames
-  S->listoccupied = -1;
+  S->listoccupied = -1;  // Lista circular de ocupados vacía al inicio.
+S->listfree = i;       // El último marco libre apunta al final.
 }
 
 // Functions that simulate the hardware of the MMU
@@ -93,23 +93,19 @@ void handle_page_fault(ssystem* S, unsigned virtual_addr) {
 	  printf ("@ PAGE_FAULT in P %d!\n", page);
 //Comprobamos si hay marcos libres
  if (S->listfree != -1) {
-	// There are free frames
-	last = S->listfree;
-  //Obtienesmos el marco actual usando
-	frame = S->frt[last].next;
-	  if (frame==last) {
-		// Then, this is the last one left.
-		  S->listfree = -1;
-	  } else {
-		// Otherwise, bypass
-		  S->frt[last].next = S->frt[frame].next;			
-	  }
-	occupy_free_frame(S, frame, page);
-}
-else {
-	// There are not free frames
-	victim = choose_page_to_be_replaced(S);
-	replace_page(S, victim, page);
+    // Sacamos un marco libre de la lista circular.
+    last = S->listfree;
+    frame = S->frt[last].next;
+    if (frame == last) {
+        S->listfree = -1;  // La lista de libres queda vacía.
+    } else {
+        S->frt[last].next = S->frt[frame].next;  // Saltamos al siguiente marco libre.
+    }
+    occupy_free_frame(S, frame, page);  // Ocupamos el marco con la nueva página.
+} else {
+    // No hay marcos libres: seleccionamos un marco víctima.
+    victim = choose_page_to_be_replaced(S);
+    replace_page(S, victim, page);
 }
 
 
@@ -131,58 +127,64 @@ static unsigned myrandom(unsigned from,  // <<--- random
 }
 
 int choose_page_to_be_replaced(ssystem* S) {
-  int frame, victim;
+    int frame, victim;
 
-  frame = myrandom(0, S->numframes);  // <<--- random
+    // El marco víctima es el que sigue al último en la lista circular.
+    frame = S->frt[S->listoccupied].next;
+    victim = S->frt[frame].page;
 
-  victim = S->frt[frame].page;
+    // Actualizamos listoccupied al marco seleccionado.
+    S->listoccupied = frame;
 
-  if (S->detailed)
-    printf(
-        "@ Choosing (at random) P%d of F%d to be "
-        "replaced\n",
-        victim, frame);
+    if (S->detailed)
+        printf("@ Choosing (at FIFO) P%d of F%d to be replaced\n", victim, frame);
 
-  return victim;
+    return victim;  // Devolvemos la página víctima.
 }
+
 
 void replace_page(ssystem* S, int victim, int newpage) {
-  int frame;
+    int frame = S->pgt[victim].frame;
 
-  frame = S->pgt[victim].frame;
+    if (S->pgt[victim].modified) {
+        if (S->detailed)
+            printf("@ Writing modified P%d back (to disc) to replace it\n", victim);
+        S->numpgwriteback++;
+    }
 
-  if (S->pgt[victim].modified) {
     if (S->detailed)
-      printf(
-          "@ Writing modified P%d back (to disc) to "
-          "replace it\n",
-          victim);
+        printf("@ Replacing victim P%d with P%d in F%d\n", victim, newpage, frame);
 
-    S->numpgwriteback++;
-  }
+    // Actualizamos la tabla de páginas.
+    S->pgt[victim].present = 0;
+    S->pgt[newpage].present = 1;
+    S->pgt[newpage].frame = frame;
+    S->pgt[newpage].modified = 0;
 
-  if (S->detailed)
-    printf("@ Replacing victim P%d with P%d in F%d\n", victim, newpage, frame);
-
-  S->pgt[victim].present = 0;
-
-  S->pgt[newpage].present = 1;
-  S->pgt[newpage].frame = frame;
-  S->pgt[newpage].modified = 0;
-
-  S->frt[frame].page = newpage;
+    S->frt[frame].page = newpage;
 }
+
 
 void occupy_free_frame(ssystem* S, int frame, int page) {
-  //Modo detallado
-  if (S->detailed) printf("@ Storing P%d in F%d\n", page, frame);
-//ACTUALIZAMOS LA TABLA DE PAGINAS
-  S->pgt[page].present = 1; //Pagina cargada en memoria
-  S->pgt[page].frame = frame; //Vinculamos el marco fisico
-  S->pgt[page].modified = 0; //No ha sido modificada
-  S->frt[frame].page = page; //Vinculamos el marco físico con la página que ahora almacena.
+    if (S->detailed) printf("@ Storing P%d in F%d\n", page, frame);
 
+    // Si la lista de ocupados está vacía, inicializamos la lista.
+    if (S->listoccupied == -1) {
+        S->frt[frame].next = frame;  // Un único marco en la lista.
+    } else {
+        // Conectamos el nuevo marco al inicio de la lista.
+        S->frt[frame].next = S->frt[S->listoccupied].next;
+        S->frt[S->listoccupied].next = frame;
+    }
+    S->listoccupied = frame;  // Actualizamos el último marco ocupado.
+
+    // Actualizamos la tabla de páginas y el marco.
+    S->pgt[page].present = 1;
+    S->pgt[page].frame = frame;
+    S->pgt[page].modified = 0;
+    S->frt[frame].page = page;
 }
+
 
 // Functions that show results
 
@@ -220,6 +222,6 @@ void print_frames_table(ssystem* S) {
 
 void print_replacement_report(ssystem* S) {
   printf(
-      "Random replacement "
+      "FIFO"
       "(no specific information)\n");  // <<--- random
 }

@@ -1,6 +1,6 @@
 /*
     Copyright 2023 The Operating System Group at the UAH
-    sim_pag_random.c
+    sim_pag_lru.c
  */
 
 #include <stdio.h>
@@ -43,27 +43,26 @@ void init_tables(ssystem* S) {
 unsigned sim_mmu(ssystem* S, unsigned virtual_addr, char op) {
   unsigned physical_addr;
   int page, frame, offset;
-//Calcular pagina y desplazamiento.
-  page   = virtual_addr / S->pagsz;  // División entera: obtienes el número de página.
-  offset = virtual_addr % S->pagsz; // Residuo: obtienes el desplazamiento dentro de la página.
-//Para controlar q no se accede a direcciones no permitidas
+
+  page   = virtual_addr / S-> pagsz ;	// Quotient 
+  offset = virtual_addr % S-> pagsz ;	// Reminder
 
   if ( page <0 || page >= S->numpags )
   {
 	  S->numillegalrefs++;  // References out of range 
 	  return ~0U;	// Return invalid physical 0xFFF..F
   }
-//LLamamos a la rutina de manejar page fault si no esta la pagina buscada
+
   if (! S->pgt[page].present )
 	// Not present: trigger page fault exception 
 	  handle_page_fault(S, virtual_addr);
 
   // Now it is present
-  frame = S->pgt[page].frame ;	// Obtienemos el marco físico desde la tabla de páginas.
-  physical_addr = frame*S->pagsz+offset; //Calculamos la dic fisica
+  frame = S->pgt[page].frame ;	
+  physical_addr = frame*S->pagsz+offset;
 
-  reference_page (S, page, op);//Referenciamos la pagina
-//modo detallado
+  reference_page (S, page, op);
+
   if (S->detailed) {
 	  printf ("\t %c %u==P %d(M %d)+ %d\n", op, virtual_addr, page, frame, offset);
   }
@@ -77,25 +76,29 @@ void reference_page(ssystem* S, int page, char op) {
   } else if (op == 'W') {       // If it's a write,
     S->pgt[page].modified = 1;  // count it and mark the
     S->numrefswrite++;          // page 'modified'
-  }
+    }
+    S->pgt[page].timestamp = S->clock;//Actualizamos la marca de tiempo de la página
+    S->clock++;//Incrementamos
+ //Control de overflow
+if(S->clock == 0)
+{
+  printf("Cuidadin que hay overflow del reloj :)");
+}
 }
 
 // Functions that simulate the operating system
 
 void handle_page_fault(ssystem* S, unsigned virtual_addr) {
   int page, victim, frame, last;
-//Incrementamos el numero de page faults
+
   S->numpagefaults ++;
-  //Calculamos el número de página que causó el fallo dividiendo la dirección virtual entre el tamaño de la página.
   page = virtual_addr / S-> pagsz;
-  //Si esta modo detalle mostramos la pagina que lo causó.
   if (S->detailed)
 	  printf ("@ PAGE_FAULT in P %d!\n", page);
-//Comprobamos si hay marcos libres
+
  if (S->listfree != -1) {
 	// There are free frames
 	last = S->listfree;
-  //Obtienesmos el marco actual usando
 	frame = S->frt[last].next;
 	  if (frame==last) {
 		// Then, this is the last one left.
@@ -111,11 +114,7 @@ else {
 	victim = choose_page_to_be_replaced(S);
 	replace_page(S, victim, page);
 }
-
-
-
 }
-
 static unsigned myrandom(unsigned from,  // <<--- random
                          unsigned size) {
   unsigned n;
@@ -131,15 +130,22 @@ static unsigned myrandom(unsigned from,  // <<--- random
 }
 
 int choose_page_to_be_replaced(ssystem* S) {
-  int frame, victim;
+  int frame = -1, victim;//Inicialización
 
-  frame = myrandom(0, S->numframes);  // <<--- random
+//buscamos la página con la marca de tiempo más baja
+  for(int i = 0; i < S->numframes; i++){
+    if(frame == -1)
+      frame = i;
+    if(S->pgt[S->frt[i].page].timestamp < S->pgt[S->frt[frame].page].timestamp)
+      frame = i;
+  }
+  //La almacenamos
 
   victim = S->frt[frame].page;
-
+//modo detalle
   if (S->detailed)
     printf(
-        "@ Choosing (at random) P%d of F%d to be "
+        "@ Choosing (at LRU) P%d of F%d to be "
         "replaced\n",
         victim, frame);
 
@@ -174,14 +180,13 @@ void replace_page(ssystem* S, int victim, int newpage) {
 }
 
 void occupy_free_frame(ssystem* S, int frame, int page) {
-  //Modo detallado
   if (S->detailed) printf("@ Storing P%d in F%d\n", page, frame);
-//ACTUALIZAMOS LA TABLA DE PAGINAS
-  S->pgt[page].present = 1; //Pagina cargada en memoria
-  S->pgt[page].frame = frame; //Vinculamos el marco fisico
-  S->pgt[page].modified = 0; //No ha sido modificada
-  S->frt[frame].page = page; //Vinculamos el marco físico con la página que ahora almacena.
 
+  S->pgt[page].frame = frame;
+  S->frt[frame].page = page;
+
+  S->pgt[page].present = 1;
+  S->pgt[page].referenced = 1;
 }
 
 // Functions that show results
@@ -189,14 +194,14 @@ void occupy_free_frame(ssystem* S, int frame, int page) {
 void print_page_table(ssystem* S) {
   int p;
 
-  printf("%10s %10s %10s   %s\n", "PAGE", "Present", "Frame", "Modified");
+  printf("%10s %10s %10s %10s   %s\n", "PAGE", "Present", "Frame", "Modified", "Timestamp");
 
   for (p = 0; p < S->numpags; p++)
     if (S->pgt[p].present)
-      printf("%8d   %6d     %8d   %6d\n", p, S->pgt[p].present, S->pgt[p].frame,
-             S->pgt[p].modified);
+      printf("%8d   %6d     %8d   %6d   %8d\n", p, S->pgt[p].present, S->pgt[p].frame,
+             S->pgt[p].modified, S->pgt[p].timestamp);
     else
-      printf("%8d   %6d     %8s   %6s\n", p, S->pgt[p].present, "-", "-");
+      printf("%8d   %6d     %8s   %6s   %8d\n", p, S->pgt[p].present, "-", "-", S->pgt[p].timestamp);
 }
 
 void print_frames_table(ssystem* S) {
@@ -219,7 +224,21 @@ void print_frames_table(ssystem* S) {
 }
 
 void print_replacement_report(ssystem* S) {
+  //Inicializamos las variables
+  int mintimestamp, maxtimestamp;
+  for(int i = 0; i < S->numpags; i++){
+    if(i == 0){
+      mintimestamp = S->pgt[i].timestamp;
+      maxtimestamp = S->pgt[i].timestamp;
+    }
+    if(S->pgt[i].timestamp < mintimestamp)
+      mintimestamp = S->pgt[i].timestamp;
+    if(S->pgt[i].timestamp > maxtimestamp)
+      maxtimestamp = S->pgt[i].timestamp;
+  }
+
+
   printf(
-      "Random replacement "
-      "(no specific information)\n");  // <<--- random
+      "LRU replacement "
+      "(Clock value: %10d, Min timestamp: %10d, Max timestamp: %10d)\n", S->clock, mintimestamp, maxtimestamp);  
 }

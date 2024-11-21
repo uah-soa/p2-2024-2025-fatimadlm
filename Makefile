@@ -1,4 +1,4 @@
-all: gen_trace count_ops calculate_ws sim_pag_random
+all: gen_trace count_ops calculate_ws sim_pag_random sim_pag_lru sim_pag_fifo sim_pag_fifo2ch 
 
 # Add progressively to all: sim_pag_random sim_pag_lru sim_pag_fifo sim_pag_fifo2ch
 
@@ -41,6 +41,7 @@ sim_pag_fifo2ch: sim_pag_fifo2ch.o sim_pag_main.o
 sim_pag_fifo2ch.o: sim_pag_fifo2ch.c sim_paging.h
 	gcc -g -Wall -c -o sim_pag_fifo2ch.o sim_pag_fifo2ch.c
 
+
 sim_pag_main.o: sim_pag_main.c sim_paging.h
 	gcc -g -Wall -c -o sim_pag_main.o sim_pag_main.c
 
@@ -53,5 +54,5 @@ clean:
 	rm -f sim_pag_lru.o sim_pag_lru
 	rm -f sim_pag_fifo.o sim_pag_fifo
 	rm -f sim_pag_fifo2ch.o sim_pag_fifo2ch
+	rm -f sim_pag_optimum.o sim_pag_optimum
 	rm -f *.plist
-
